@@ -38,6 +38,10 @@
   .note{font-size:12px;color:var(--muted);line-height:1.6;margin-top:8px}
   .btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 10px;font-size:13px;color:var(--navy);cursor:pointer;margin-top:8px}
   .scroll{overflow-x:auto}
+  .tabs{display:flex;gap:8px;margin-bottom:12px}
+  .tab{flex:1;border:2px solid var(--navy);background:#fff;color:var(--navy);border-radius:12px;padding:12px 8px;font-size:15px;font-weight:700;cursor:pointer}
+  .tab.on{background:var(--navy);color:#fff}
+  .hide{display:none}
   @media (max-width:600px){
     .inputs,.results{grid-template-columns:1fr}
     .res{display:flex;align-items:center;justify-content:space-between;text-align:left}
@@ -48,9 +52,11 @@
 <body>
 <header>
   <h1>蓝莓 · 产地出厂价测算</h1>
-  <p>输入原料收购价，自动算出每箱出厂价（含税、到深圳）。价格均按「箱」计。</p>
+  <p>原料价 ⇄ 出厂价，双向测算（含税、到深圳）。价格均按「箱」计。</p>
 </header>
 <main>
+  <div class="tabs"><button class="tab on" id="tabF">原料价 → 出厂价</button><button class="tab" id="tabR">工厂报价 → 原料价</button></div>
+  <div id="modeF">
   <div class="card">
     <h2>① 输入原料收购价（元 / kg）</h2>
     <div class="inputs">
@@ -79,6 +85,36 @@
     </table>
     </div>
   </div>
+  </div>
+
+  <div id="modeR" class="hide">
+  <div class="card">
+    <h2>① 输入工厂出厂报价（元 / 箱）</h2>
+    <div class="inputs">
+      <div class="inp"><label><b>125g 盒</b></label><input id="fp0" type="number" inputmode="decimal" step="0.1" placeholder="输入报价"><div class="unit">12 盒 / 箱</div></div>
+      <div class="inp"><label><b>200g 筒</b></label><input id="fp1" type="number" inputmode="decimal" step="0.1" placeholder="输入报价"><div class="unit">10 筒 / 箱</div></div>
+      <div class="inp"><label><b>500g 盒</b></label><input id="fp2" type="number" inputmode="decimal" step="0.1" placeholder="输入报价"><div class="unit">8 盒 / 箱</div></div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>② 倒推原料价（元 / kg）</h2>
+    <div class="results">
+      <div class="res"><div><div class="t">125g（12 盒/箱）</div><div class="s" id="rr0"></div></div><div class="v" id="q0">–</div></div>
+      <div class="res"><div><div class="t">200g（10 筒/箱）</div><div class="s" id="rr1"></div></div><div class="v" id="q1">–</div></div>
+      <div class="res"><div><div class="t">500g（8 盒/箱）</div><div class="s" id="rr2"></div></div><div class="v" id="q2">–</div></div>
+    </div>
+    <div class="note">大字按「计算用损耗率」倒推；小字为损耗按下限～上限时的区间（损耗越低，倒推出的原料价越高）。<br>⚠️ 结果取决于下方「工厂毛利率」和「人工」两个参数——默认是参考值，不是工厂真实数据；读作「如果工厂赚这么多，原料大约这个价」。</div>
+  </div>
+  <div class="card">
+    <h2>③ 报价拆解（元 / 箱）</h2>
+    <div class="scroll">
+    <table>
+      <thead><tr><th>项目</th><th>125g</th><th>200g</th><th>500g</th></tr></thead>
+      <tbody id="breakdownR"></tbody>
+    </table>
+    </div>
+  </div>
+  </div>
 
   <div class="card">
     <details>
@@ -93,6 +129,7 @@
       <div class="note">
         · 每箱需原料 ＝ 成品重量（净重 ×（1＋溢重）× 每箱盒数）÷（1－损耗率）<br>
         · 出厂价 ＝（原料＋包材整套＋报检辅材＋人工＋运费）×（1＋工厂毛利率）<br>
+        · 倒推原料价 ＝（出厂价 ÷（1＋工厂毛利率）－包材整套－报检辅材－人工－运费）÷ 每箱需原料 kg<br>
         · 人工已含分选加工和预冷；包材整套＝一箱的盒／筒＋外箱。<br>
         · 默认参数：损耗按周期平均 6.5%（区间 5%～8%）；溢重 125g、200g 3%，500g 5%；人工和毛利率为参考值，请按实际调整。
       </div>
@@ -122,7 +159,7 @@ function buildParams(){
     tb.appendChild(tr);
   });
   tb.querySelectorAll('input').forEach(el=>el.addEventListener('input',e=>{
-    const k=e.target.dataset.k,i=+e.target.dataset.i; P[k][i]=parseFloat(e.target.value); calc();
+    const k=e.target.dataset.k,i=+e.target.dataset.i; P[k][i]=parseFloat(e.target.value); calcAll();
   }));
 }
 function cost(i,raw,loss){
@@ -150,9 +187,32 @@ function calc(){
     return '<tr'+cls+'><td>'+t+'</td>'+rows[k].map(v=>'<td>'+(isFinite(v)?v.toLocaleString('zh-CN',{minimumFractionDigits:d,maximumFractionDigits:d}):'–')+'</td>').join('')+'</tr>';
   }).join('');
 }
+function calcR(){
+  const rows={fp:[],net:[],pack:[],insp:[],labor:[],freight:[],left:[],rawKg:[],raw:[]};
+  const rawAt=(i,fp,loss)=>{const kg=P.net[i]*(1+P.over[i]/100)*P.pcs[i]/1000;const nr=P.pack[i]+P.insp[i]+kg*P.labor[i]+P.freight[i];const net=fp/(1+P.margin[i]/100);const rawKg=kg/(1-loss/100);return {kg,net,labor:kg*P.labor[i],left:net-nr,rawKg,raw:(net-nr)/rawKg};};
+  for(let i=0;i<3;i++){
+    const fp=parseFloat(document.getElementById('fp'+i).value);
+    const c=rawAt(i,fp,P.loss[i]), lo=rawAt(i,fp,P.lossLo[i]), hi=rawAt(i,fp,P.lossHi[i]);
+    document.getElementById('q'+i).textContent=isFinite(c.raw)?'¥'+fmt(c.raw):'–';
+    document.getElementById('rr'+i).textContent=isFinite(c.raw)?'损耗 '+P.lossLo[i]+'%～'+P.lossHi[i]+'%：¥'+fmt(lo.raw)+' ～ ¥'+fmt(hi.raw)+' /kg':'';
+    rows.fp.push(fp); rows.net.push(c.net); rows.pack.push(P.pack[i]); rows.insp.push(P.insp[i]); rows.labor.push(c.labor);
+    rows.freight.push(P.freight[i]); rows.left.push(c.left); rows.rawKg.push(c.rawKg); rows.raw.push(c.raw);
+  }
+  const L=[['工厂出厂报价','fp'],['去掉工厂毛利后','net','sum'],['－ 包材整套','pack'],['－ 报检＋辅材','insp'],['－ 人工（含预冷）','labor'],['－ 产地→深圳运费','freight'],['＝ 剩下给原料的钱','left','sum'],['÷ 每箱需原料（kg）','rawKg',3],['★ 倒推原料价（元/kg）','raw','star']];
+  document.getElementById('breakdownR').innerHTML=L.map(([t,k,x])=>{
+    const cls=x==='sum'?' class="sum"':x==='star'?' class="star"':'';
+    const d=typeof x==='number'?x:2;
+    return '<tr'+cls+'><td>'+t+'</td>'+rows[k].map(v=>'<td>'+(isFinite(v)?v.toLocaleString('zh-CN',{minimumFractionDigits:d,maximumFractionDigits:d}):'–')+'</td>').join('')+'</tr>';
+  }).join('');
+}
+function calcAll(){calc();calcR();}
+function setMode(r){document.getElementById('modeF').classList.toggle('hide',r);document.getElementById('modeR').classList.toggle('hide',!r);document.getElementById('tabF').classList.toggle('on',!r);document.getElementById('tabR').classList.toggle('on',r);}
+document.getElementById('tabF').addEventListener('click',()=>setMode(false));
+document.getElementById('tabR').addEventListener('click',()=>setMode(true));
+['fp0','fp1','fp2'].forEach(id=>document.getElementById(id).addEventListener('input',calcR));
 ['raw0','raw1','raw2'].forEach(id=>document.getElementById(id).addEventListener('input',calc));
-document.getElementById('reset').addEventListener('click',()=>{P=JSON.parse(JSON.stringify(DEFAULTS));buildParams();calc();});
-buildParams(); calc();
+document.getElementById('reset').addEventListener('click',()=>{P=JSON.parse(JSON.stringify(DEFAULTS));buildParams();calcAll();});
+buildParams(); calcAll();
 </script>
 </body>
 </html>
